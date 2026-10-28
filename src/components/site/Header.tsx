@@ -19,8 +19,9 @@ export const NAV_LINKS = [
 
 export function Header({ settings }: { settings: SiteSettings }) {
   const tel = telLink(settings.phone);
+  // Solid background (no backdrop-filter): a backdrop-filter would trap the fixed mobile menu inside the 80px header.
   return (
-    <header className="sticky top-0 z-40 border-b border-white/5 bg-navy-950/95 text-ivory-50 backdrop-blur supports-[backdrop-filter]:bg-navy-950/85">
+    <header className="sticky top-0 z-40 border-b border-white/5 bg-navy-950 text-ivory-50">
       <a
         href="#main"
         className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-3 focus:z-50 focus:rounded focus:bg-ivory-50 focus:px-4 focus:py-2 focus:text-navy-900"

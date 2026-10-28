@@ -3,15 +3,18 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { IconClose, IconHeart, IconMenu, IconPhone } from "@/components/icons";
 import { telLink } from "@/lib/utils";
 
 export function MobileNav({ links, phone }: { links: { href: string; label: string }[]; phone: string | null }) {
   const [open, setOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const pathname = usePathname();
   const buttonRef = useRef<HTMLButtonElement>(null);
   const tel = telLink(phone);
 
+  useEffect(() => setMounted(true), []);
   useEffect(() => setOpen(false), [pathname]);
 
   useEffect(() => {
@@ -43,22 +46,25 @@ export function MobileNav({ links, phone }: { links: { href: string; label: stri
       >
         {open ? <IconClose className="h-6 w-6" /> : <IconMenu className="h-6 w-6" />}
       </button>
-      {open ? (
+      {/* Rendered into <body>: the header's backdrop-blur would otherwise become the containing
+          block for this fixed panel, squashing it to the header's 80px height. */}
+      {open && mounted
+        ? createPortal(
         <div
           id="mobile-menu"
-          className="fixed inset-x-0 bottom-0 top-[80px] z-40 overflow-y-auto bg-navy-950 px-6 pb-10 pt-6"
+          className="fixed inset-x-0 bottom-0 top-[80px] z-[45] h-[calc(100dvh-80px)] overflow-y-auto overscroll-contain bg-navy-950 px-6 pb-10 pt-4 xl:hidden"
         >
           <nav aria-label="Mobile">
             <ul className="divide-y divide-white/10 border-y border-white/10">
               {links.map((l) => (
                 <li key={l.href}>
-                  <Link href={l.href} className="block py-4 font-display text-2xl text-ivory-50">
+                  <Link href={l.href} onClick={() => setOpen(false)} className="block py-3.5 font-display text-[1.6rem] leading-tight text-ivory-50 hover:text-champagne-300">
                     {l.label}
                   </Link>
                 </li>
               ))}
               <li>
-                <Link href="/favourites" className="flex items-center gap-3 py-4 font-display text-2xl text-ivory-50">
+                <Link href="/favourites" onClick={() => setOpen(false)} className="flex items-center gap-3 py-3.5 font-display text-[1.6rem] leading-tight text-ivory-50 hover:text-champagne-300">
                   <IconHeart className="h-5 w-5 text-champagne-300" /> Saved properties
                 </Link>
               </li>
@@ -77,8 +83,10 @@ export function MobileNav({ links, phone }: { links: { href: string; label: stri
               </a>
             ) : null}
           </div>
-        </div>
-      ) : null}
+        </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
