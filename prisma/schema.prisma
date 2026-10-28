@@ -1,0 +1,472 @@
+// Premium real estate platform — database schema
+// Run `npx prisma migrate dev --name init` on first setup to generate the
+// initial migration in prisma/migrations, and commit that folder.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────── Users & access ───────────────────────────────
+
+enum Role {
+  ADMIN // full access incl. users, settings, deletion
+  EDITOR // properties + content + enquiries
+  AGENT // enquiries assigned to them + read-only properties
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String
+  passwordHash String
+  role         Role      @default(AGENT)
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  sessions          Session[]
+  assignedEnquiries Enquiry[]     @relation("AssignedEnquiries")
+  enquiryNotes      EnquiryNote[]
+  auditLogs         AuditLog[]
+  articles          Article[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  // SHA-256 of the random token stored in the cookie; the raw token is never persisted.
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  userAgent String?
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// ─────────────────────────────── Taxonomy ───────────────────────────────
+
+model PropertyCategory {
+  id         String     @id @default(cuid())
+  name       String     @unique
+  slug       String     @unique
+  // RESIDENTIAL | COMMERCIAL | LAND | INDUSTRIAL | OTHER — drives which fields matter (beds/baths etc.)
+  group      String     @default("RESIDENTIAL")
+  sortOrder  Int        @default(0)
+  properties Property[]
+}
+
+model Location {
+  id         String     @id @default(cuid())
+  name       String
+  slug       String     @unique
+  city       String?
+  state      String?
+  country    String?
+  sortOrder  Int        @default(0)
+  isActive   Boolean    @default(true)
+  // Optional area guide shown on /areas/<slug>. Area pages are only indexed when this is filled in.
+  description String?   @db.Text
+  properties Property[]
+
+  @@index([isActive, sortOrder])
+}
+
+model Amenity {
+  id         String     @id @default(cuid())
+  name       String     @unique
+  slug       String     @unique
+  properties Property[]
+}
+
+// ─────────────────────────────── Properties ───────────────────────────────
+
+enum TransactionType {
+  SALE
+  RENT
+  LEASE
+}
+
+enum ListingStatus {
+  DRAFT
+  AVAILABLE
+  UNDER_OFFER
+  RESERVED
+  SOLD
+  RENTED
+  WITHDRAWN
+  ARCHIVED
+}
+
+enum Furnishing {
+  UNFURNISHED
+  SEMI_FURNISHED
+  FURNISHED
+}
+
+enum AreaUnit {
+  SQM
+  SQFT
+  HECTARE
+  ACRE
+  PLOT
+}
+
+model Property {
+  id              String          @id @default(cuid())
+  slug            String          @unique
+  reference       String          @unique // public listing reference e.g. PE-2026-0012
+  title           String
+  summary         String?         @db.VarChar(320)
+  description     String          @db.Text
+  transactionType TransactionType
+  status          ListingStatus   @default(DRAFT)
+  isPublished     Boolean         @default(false)
+  isFeatured      Boolean         @default(false)
+  // Shown under Investment Opportunities (land, commercial, development or income-producing assets)
+  isInvestment    Boolean         @default(false)
+  publishedAt     DateTime?
+
+  // Pricing — `price` is null when priceOnRequest is true
+  price           Decimal?        @db.Decimal(16, 2)
+  priceOnRequest  Boolean         @default(false)
+  pricePeriod     String? // e.g. "per year", "per month" for rentals
+  currency        String          @default("NGN")
+
+  categoryId      String
+  category        PropertyCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  locationId      String
+  location        Location        @relation(fields: [locationId], references: [id], onDelete: Restrict)
+
+  // Development or estate name, where relevant and approved for publication
+  estate          String?
+  // Public area text (e.g. "Off Admiralty Way, Lekki Phase 1"). Never the private street address.
+  displayAddress  String?
+  // Private — admin only. Never rendered on public pages.
+  privateAddress  String?
+  privateNotes    String?         @db.Text
+  ownerName       String?
+  ownerContact    String?
+
+  // Map: only shown when showMap is true. mapQuery can be an area/landmark rather than an exact address.
+  showMap         Boolean         @default(false)
+  mapQuery        String?
+
+  bedrooms        Int?
+  bathrooms       Int?
+  toilets         Int?
+  parkingSpaces   Int?
+  floorArea       Decimal?        @db.Decimal(12, 2)
+  floorAreaUnit   AreaUnit?
+  plotSize        Decimal?        @db.Decimal(12, 2)
+  plotSizeUnit    AreaUnit?
+  yearBuilt       Int?
+  furnishing      Furnishing?
+  titleDocument   String? // e.g. "C of O", "Governor's Consent" — only when verified
+
+  videoUrl        String?
+  virtualTourUrl  String?
+
+  seoTitle        String?
+  seoDescription  String?         @db.VarChar(320)
+
+  lastReviewedAt  DateTime?
+  viewCount       Int             @default(0)
+
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  amenities       Amenity[]
+  media           PropertyMedia[]
+  enquiries       Enquiry[]
+
+  @@index([isPublished, status])
+  @@index([isPublished, isFeatured])
+  @@index([isPublished, isInvestment])
+  @@index([transactionType])
+  @@index([categoryId])
+  @@index([locationId])
+  @@index([price])
+  @@index([bedrooms])
+  @@index([publishedAt])
+}
+
+enum MediaKind {
+  IMAGE
+  FLOOR_PLAN
+  BROCHURE
+}
+
+model PropertyMedia {
+  id         String    @id @default(cuid())
+  propertyId String
+  property   Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  kind       MediaKind @default(IMAGE)
+  url        String
+  publicId   String? // storage provider id, used for deletion
+  alt        String?
+  width      Int?
+  height     Int?
+  sortOrder  Int       @default(0)
+  createdAt  DateTime  @default(now())
+
+  @@index([propertyId, kind, sortOrder])
+}
+
+// ─────────────────────────────── Leads ───────────────────────────────
+
+enum EnquiryType {
+  GENERAL
+  PROPERTY
+  VIEWING
+  CONSULTATION
+  LISTING_SUBMISSION
+  REQUIREMENT // buyer / tenant requirement or property-sourcing request
+  INVESTOR // international, diaspora or investor enquiry
+}
+
+enum EnquiryStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  VIEWING_SCHEDULED
+  CLOSED_WON
+  CLOSED_LOST
+  SPAM
+}
+
+// Property enquiries, viewing requests, consultations and listing submissions
+// share one model (distinguished by `type`) so staff work from a single inbox.
+model Enquiry {
+  id             String        @id @default(cuid())
+  type           EnquiryType   @default(GENERAL)
+  status         EnquiryStatus @default(NEW)
+  name           String
+  email          String
+  phone          String?
+  message        String        @db.Text
+  propertyId     String?
+  property       Property?     @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  // Viewing requests
+  preferredDate  DateTime?
+  preferredTime  String?
+  // Listing submissions
+  submissionData Json?
+  consentToContact Boolean     @default(true)
+  source         String? // page path the enquiry came from
+  // First-touch attribution (captured in the visitor's session; no tracking cookies)
+  utmSource      String?
+  utmMedium      String?
+  utmCampaign    String?
+  landingPage    String?
+  assignedToId   String?
+  assignedTo     User?         @relation("AssignedEnquiries", fields: [assignedToId], references: [id], onDelete: SetNull)
+  followUpAt     DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  notes          EnquiryNote[]
+
+  @@index([status, createdAt])
+  @@index([type, createdAt])
+  @@index([propertyId])
+  @@index([assignedToId])
+  @@index([email])
+  @@index([utmSource])
+}
+
+model EnquiryNote {
+  id        String   @id @default(cuid())
+  enquiryId String
+  enquiry   Enquiry  @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
+  authorId  String?
+  author    User?    @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  body      String   @db.Text
+  createdAt DateTime @default(now())
+
+  @@index([enquiryId, createdAt])
+}
+
+model NewsletterSubscriber {
+  id          String    @id @default(cuid())
+  email       String    @unique
+  consentAt   DateTime  @default(now())
+  consentText String
+  unsubscribedAt DateTime?
+  createdAt   DateTime  @default(now())
+}
+
+// ─────────────────────────────── Content ───────────────────────────────
+
+model Service {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  title       String
+  summary     String   @db.VarChar(320)
+  body        String   @db.Text
+  isPublished Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  seoTitle    String?
+  seoDescription String? @db.VarChar(320)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isPublished, sortOrder])
+}
+
+model Faq {
+  id          String   @id @default(cuid())
+  question    String
+  answer      String   @db.Text
+  isPublished Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Testimonial {
+  id           String   @id @default(cuid())
+  authorName   String
+  authorRole   String?
+  quote        String   @db.Text
+  // Must be explicitly confirmed by an admin before it can be published.
+  isAuthorised Boolean  @default(false)
+  isPublished  Boolean  @default(false)
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Article {
+  id             String    @id @default(cuid())
+  slug           String    @unique
+  title          String
+  excerpt        String    @db.VarChar(400)
+  body           String    @db.Text
+  coverImageUrl  String?
+  coverImageAlt  String?
+  isPublished    Boolean   @default(false)
+  publishedAt    DateTime?
+  authorId       String?
+  author         User?     @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  seoTitle       String?
+  seoDescription String?   @db.VarChar(320)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([isPublished, publishedAt])
+}
+
+// Single-row table (id = "site") holding editable company info and homepage copy.
+model SiteSettings {
+  id               String   @id @default("site")
+  companyName      String   @default("[COMPANY NAME]")
+  // Logo lockup, e.g. "ADAM CHELLVAN" over "PROPERTIES AND INVESTMENT"
+  brandPrimary     String?
+  brandSecondary   String?
+  slogan           String?
+  shortDescription String?  @db.Text
+  logoUrl          String?
+  heroImageUrl     String?
+  heroImageAlt     String?
+  heroEyebrow      String?
+  heroHeadline     String?
+  heroSubtext      String?  @db.Text
+  heroSearchHeading String?
+  heroSearchText   String?
+  servicesStrip    String? // e.g. "Buy · Sell · Rent · Lease · Invest · Source"
+  categoryCards    String?  @db.Text // 4 lines "Title: description" → residential, commercial, land, investment
+  approachHeading  String?
+  approachBody     String?  @db.Text
+  internationalHeading String?
+  internationalBody String? @db.Text
+  internationalCtaText String?
+  introHeading     String?
+  introBody        String?  @db.Text
+  aboutStory       String?  @db.Text
+  mission          String?  @db.Text
+  vision           String?  @db.Text
+  values           String?  @db.Text // one value per line, "Title: description"
+  differentiators  String?  @db.Text // one per line, "Title: description"
+  insightsHeading  String?
+  insightsBody     String?  @db.Text
+  ctaHeading       String?
+  ctaBody          String?  @db.Text
+  phone            String?
+  whatsapp         String? // international format, digits only, e.g. 2348012345678
+  email            String?
+  officeAddress    String?  @db.Text
+  businessHours    String?  @db.Text
+  mapQuery         String?
+  facebookUrl      String?
+  instagramUrl     String?
+  linkedinUrl      String?
+  xUrl             String?
+  youtubeUrl       String?
+  tiktokUrl        String?
+  footerNote       String?  @db.Text
+  registrationInfo String? // only when verified, e.g. RC number
+  currency         String   @default("NGN")
+  // Indicative conversion rates, one per line: "USD=1550" (units of the listing currency per 1 USD)
+  fxRates          String?  @db.Text
+  fxRatesDate      String? // e.g. "28 Oct 2026" — shown next to every estimate
+  listingDisclaimer String? @db.Text
+  seoTitle         String?
+  seoDescription   String?  @db.VarChar(320)
+  updatedAt        DateTime @updatedAt
+}
+
+// ─────────────────────────────── Operations ───────────────────────────────
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    String // e.g. property.publish
+  entity    String // e.g. Property
+  entityId  String?
+  summary   String?
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@index([createdAt])
+}
+
+// Anonymous contact-button clicks (WhatsApp / phone / email) for reporting. No personal data.
+model ContactEvent {
+  id         String   @id @default(cuid())
+  kind       String // whatsapp | phone | email
+  path       String?
+  propertyId String?
+  createdAt  DateTime @default(now())
+
+  @@index([kind, createdAt])
+  @@index([createdAt])
+}
+
+// Uploaded files stored in PostgreSQL when Cloudinary is not configured (served at /media/<id>).
+// Suitable for a modest number of listing photos; switch to Cloudinary as the library grows.
+model StoredFile {
+  id        String   @id @default(cuid())
+  mimeType  String
+  size      Int
+  data      Bytes
+  createdAt DateTime @default(now())
+}
+
+// Sliding-window rate limiting for public forms and login.
+model RateLimitHit {
+  id        String   @id @default(cuid())
+  key       String // "<action>:<sha256(ip)>"
+  createdAt DateTime @default(now())
+
+  @@index([key, createdAt])
+}
